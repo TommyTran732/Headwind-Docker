@@ -1,0 +1,120 @@
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    # Ignore Markdown files
+    paths-ignore:
+      - '**.md'
+  schedule:
+    # Build the image daily
+    - cron: '0 0 * * *'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: tommytran732/headwind-mdm
+
+jobs:
+  shellcheck:
+    name: Entrypoint syntax checker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+
+  build:
+    name: Build & push new image
+    runs-on: "ubuntu-latest"
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            latest
+
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Sign the published Docker image
+        if: ${{ github.event_name != 'pull_request' }}
+        run: cosign sign ${TAGS} -y
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+
+  trivy:
+    name: Scan current image with Trivy
+    needs: build
+    permissions:
+      security-events: write
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'ghcr.io/tommytran732/headwind-mdm'
+          format: 'template'
+          template: '@/contrib/sarif.tpl'
+          output: 'trivy-results.sarif'
+          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
+          vuln-type: "os,library"
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy'
+
+  grype:
+    name: Scan current image with Grype
+    needs: build
+    permissions:
+      security-events: write
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: Run Grype vulnerability scanner
+        uses: anchore/scan-action@v3
+        id: grype
+        with:
+          image: "ghcr.io/tommytran732/headwind-mdm"
+          fail-build: false
+
+      - name: Upload Grype scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.grype.outputs.sarif }}
+          category: grype

@@ -1,48 +1,51 @@
-# syntax=docker/dockerfile:1
+### Build Hardened Malloc
+FROM alpine:latest as hmalloc-builder
 
-FROM tomcat:9-jdk11-temurin-jammy
+ARG HARDENED_MALLOC_VERSION=2024060400
+ARG CONFIG_NATIVE=false
+ARG VARIANT=default
 
-RUN apt-get update \
-    && apt-get upgrade -y
-RUN apt-get install -y \
-	aapt \
-	wget \
-	sed \
-        postgresql-client \
-	&& rm -rf /var/lib/apt/lists/*
+RUN apk -U upgrade \
+    && apk --no-cache add build-base git gnupg openssh-keygen
+    
+RUN cd /tmp \
+    && git clone --depth 1 --branch ${HARDENED_MALLOC_VERSION} https://github.com/GrapheneOS/hardened_malloc \
+    && cd hardened_malloc \
+    && wget -q https://grapheneos.org/allowed_signers -O grapheneos_allowed_signers \
+    && git config gpg.ssh.allowedSignersFile grapheneos_allowed_signers \
+    && git verify-tag $(git describe --tags) \
+    && make CONFIG_NATIVE=${CONFIG_NATIVE} VARIANT=${VARIANT}
+
+### Build Production
+FROM tomcat:9
+
+LABEL maintainer="Thien Tran contact@tommytran.io"
+
+RUN apt update \
+    && apt full-upgrade -y
+RUN apt install -y aapt wget sed postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /usr/local/tomcat/conf/Catalina/localhost
 RUN mkdir -p /usr/local/tomcat/ssl
 
-# Set to 1 to force updating the config files
-# If not set, they will be created only if there's no files
-#ENV FORCE_RECONFIGURE=true
-ENV FORCE_RECONFIGURE=
+COPY --from=hmalloc-builder /tmp/hardened_malloc/out/libhardened_malloc.so /usr/local/lib/
+COPY docker-entrypoint.sh /
+COPY tomcat_conf/server.xml /usr/local/tomcat/conf/server.xml 
+ADD templates /opt/hmdm/templates/
+
+ENV HMDM_VARIANT=os
+ENV DOWNLOAD_CREDENTIALS=
+ENV SERVER_VERSION=5.27.1
+ENV CLIENT_VERSION=5.27
+ENV HMDM_URL=https://h-mdm.com/files/hmdm-${SERVER_VERSION}-${HMDM_VARIANT}.war
 
 # Available values: en, ru (en by default)
 ENV INSTALL_LANGUAGE=en
 
-#ENV ADMIN_EMAIL=
-
 # Different for open source and premium versions!
 ENV SHARED_SECRET=changeme-C3z9vi54
 
-ENV HMDM_VARIANT=os
-ENV DOWNLOAD_CREDENTIALS=
-ENV HMDM_URL=https://h-mdm.com/files/hmdm-5.27.1-$HMDM_VARIANT.war
-ENV CLIENT_VERSION=5.27
-
-ENV SQL_HOST=localhost
-ENV SQL_PORT=5432
-ENV SQL_BASE=hmdm
-ENV SQL_USER=hmdm
-ENV SQL_PASS=Ch@nGeMe
-
 ENV PROTOCOL=https
-#ENV BASE_DOMAIN=your-domain.com
-
-# Set this parameter to your local IP address 
-# if your server is behind the NAT
-#ENV LOCAL_IP=172.31.91.82
 
 # Comment it to use custom certificates
 ENV HTTPS_LETSENCRYPT=true
@@ -53,12 +56,8 @@ ENV HTTPS_CERT=cert.pem
 ENV HTTPS_FULLCHAIN=fullchain.pem
 ENV HTTPS_PRIVKEY=privkey.pem
 
-EXPOSE 8080
-EXPOSE 8443
-EXPOSE 31000
+ENV LD_PRELOAD="/usr/local/lib/libhardened_malloc.so"
 
-COPY docker-entrypoint.sh /
-COPY tomcat_conf/server.xml /usr/local/tomcat/conf/server.xml 
-ADD templates /opt/hmdm/templates/
+EXPOSE 8080/tcp 8443/tcp 31000/tcp
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
