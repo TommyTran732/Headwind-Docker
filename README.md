@@ -1,4 +1,4 @@
-# Headwind-MDM-Docker
+# tommytran732/headwind-mdm
 
 ![Build, scan & push](https://github.com/tommytran732/Headwind-MDM-Docker/actions/workflows/build.yml/badge.svg)
 
