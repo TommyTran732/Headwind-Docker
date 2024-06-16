@@ -39,6 +39,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Extract version for tags
+        run: |
+          echo "FULL_VERSION=$(grep -oP '(?<=SERVER_VERSION=).*' Dockerfile)" >> $GITHUB_ENV
+          echo "MAJOR_VERSION=$(grep -oP '(?<=SERVER_VERSION=).*' Dockerfile | head -c4)" >> $GITHUB_ENV
+
       - name: Install cosign
         if: github.event_name != 'pull_request'
         uses: sigstore/cosign-installer@v3
@@ -61,6 +66,8 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             latest
+            ${{ env.FULL_VERSION }}
+            ${{ env.MAJOR_VERSION }}
 
       - name: Build and push Docker image
         id: build-and-push
